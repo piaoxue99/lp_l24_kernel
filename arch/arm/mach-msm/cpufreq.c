@@ -42,13 +42,8 @@
 #include <asm/div64.h>
 #endif
 
-#ifdef CONFIG_LGE_LIMIT_FREQ_TABLE
-#include <mach/board_lge.h>
-#endif
-
-#ifdef CONFIG_LGE_PM_BATTERY_ID_CHECKER
-#include <linux/power/lge_battery_id.h>
-#include <mach/msm_smsm.h>
+#ifdef CONFIG_CPU_VOLTAGE_TABLE
+static struct cpufreq_frequency_table *dts_freq_table;
 #endif
 
 static DEFINE_MUTEX(l2bw_lock);
@@ -81,6 +76,30 @@ struct cpufreq_suspend_t {
 };
 
 static DEFINE_PER_CPU(struct cpufreq_suspend_t, cpufreq_suspend);
+
+#if defined(CONFIG_MSM_LIMITER) && defined(CONFIG_ALUCARD_TOUCHSCREEN_BOOST)
+static unsigned int lower_limit_freq[NR_CPUS] = {0, 0, 0, 0};
+
+unsigned int get_cpu_min_lock(unsigned int cpu)
+{
+	if (cpu >= 0 && cpu < NR_CPUS)
+		return lower_limit_freq[cpu];
+	else
+		return 0;
+}
+EXPORT_SYMBOL(get_cpu_min_lock);
+
+void set_cpu_min_lock(unsigned int cpu, int freq)
+{
+	if (cpu >= 0 && cpu < NR_CPUS) {
+		if (freq <= 268800 || freq > 2880000)
+			lower_limit_freq[cpu] = 0;
+		else
+			lower_limit_freq[cpu] = freq;
+	}
+}
+EXPORT_SYMBOL(set_cpu_min_lock);
+#endif
 
 unsigned long msm_cpufreq_get_bw(void)
 {
@@ -125,6 +144,23 @@ static int set_cpu_freq(struct cpufreq_policy *policy, unsigned int new_freq,
 	int saved_sched_rt_prio = -EINVAL;
 	struct cpufreq_freqs freqs;
 	struct sched_param param = { .sched_priority = MAX_RT_PRIO-1 };
+#if defined(CONFIG_MSM_LIMITER) && defined(CONFIG_ALUCARD_TOUCHSCREEN_BOOST)
+	unsigned int ll_freq = lower_limit_freq[policy->cpu];
+
+	if (ll_freq) {
+		unsigned int t_freq = new_freq;
+
+		if (ll_freq && new_freq < ll_freq)
+			t_freq = ll_freq;
+
+		new_freq = t_freq;
+
+		if (new_freq < policy->min)
+			new_freq = policy->min;
+		if (new_freq > policy->max)
+			new_freq = policy->max;
+	}
+#endif
 
 	freqs.old = policy->cur;
 	freqs.new = new_freq;
@@ -237,9 +273,6 @@ static int msm_cpufreq_verify(struct cpufreq_policy *policy)
 
 static unsigned int msm_cpufreq_get_freq(unsigned int cpu)
 {
-	if (is_clk && is_sync)
-		cpu = 0;
-
 	if (is_clk)
 		return clk_get_rate(cpu_clk[cpu]) / 1000;
 
@@ -283,6 +316,11 @@ static int __cpuinit msm_cpufreq_init(struct cpufreq_policy *policy)
 #ifdef CONFIG_MSM_CPU_FREQ_SET_MIN_MAX
 	policy->min = CONFIG_MSM_CPU_FREQ_MIN;
 	policy->max = CONFIG_MSM_CPU_FREQ_MAX;
+#else
+#ifdef CONFIG_ARCH_MSM8974
+       policy->min = 300000;
+       policy->max = 2457600;
+#endif
 #endif
 
 	if (is_clk)
@@ -338,38 +376,22 @@ static int __cpuinit msm_cpufreq_cpu_callback(struct notifier_block *nfb,
 	 * before the CPU is brought up.
 	 */
 	case CPU_DEAD:
+	case CPU_UP_CANCELED:
 		if (is_clk) {
 			clk_disable_unprepare(cpu_clk[cpu]);
 			clk_disable_unprepare(l2_clk);
 			update_l2_bw(NULL);
 		}
 		break;
-	case CPU_UP_CANCELED:
-		if (is_clk) {
-			clk_unprepare(cpu_clk[cpu]);
-			clk_unprepare(l2_clk);
-			update_l2_bw(NULL);
-		}
-		break;
 	case CPU_UP_PREPARE:
 		if (is_clk) {
-			rc = clk_prepare(l2_clk);
+			rc = clk_prepare_enable(l2_clk);
 			if (rc < 0)
 				return NOTIFY_BAD;
-			rc = clk_prepare(cpu_clk[cpu]);
+			rc = clk_prepare_enable(cpu_clk[cpu]);
 			if (rc < 0)
 				return NOTIFY_BAD;
 			update_l2_bw(&cpu);
-		}
-		break;
-	case CPU_STARTING:
-		if (is_clk) {
-			rc = clk_enable(l2_clk);
-			if (rc < 0)
-				return NOTIFY_BAD;
-			rc = clk_enable(cpu_clk[cpu]);
-			if (rc < 0)
-				return NOTIFY_BAD;
 		}
 		break;
 	default:
@@ -429,72 +451,19 @@ static struct cpufreq_driver msm_cpufreq_driver = {
 	.attr		= msm_freq_attr,
 };
 
-#ifdef CONFIG_LGE_LIMIT_FREQ_TABLE
-#define PROP_FACT_TBL "lge,cpufreq-factory-table"
-#endif
-
 #define PROP_TBL "qcom,cpufreq-table"
 static int cpufreq_parse_dt(struct device *dev)
 {
 	int ret, len, nf, num_cols = 2, i, j;
 	u32 *data;
 
-#ifdef CONFIG_LGE_PM_BATTERY_ID_CHECKER
-    uint *smem_batt = 0;
-    int IsBattery = 0;
-#endif
-
-#ifdef CONFIG_LGE_LIMIT_FREQ_TABLE
-	enum lge_boot_mode_type boot_mode = lge_get_boot_mode();
-#endif
-
 	if (l2_clk)
 		num_cols++;
 
-#ifdef CONFIG_LGE_PM_BATTERY_ID_CHECKER
-    smem_batt = (uint *)smem_alloc(SMEM_BATT_INFO, sizeof(smem_batt));
-    if (smem_batt == NULL) {
-        pr_err("%s : smem_alloc returns NULL\n",__func__);
-    }
-    else {
-        pr_err("Batt ID from SBL = %d\n", *smem_batt);
-        if (*smem_batt == BATT_ID_DS2704_L ||
-            *smem_batt == BATT_ID_DS2704_C ||
-            *smem_batt == BATT_ID_ISL6296_L ||
-            *smem_batt == BATT_ID_ISL6296_C) {
-            //To Do if Battery is present
-            IsBattery = 1;
-        }
-        else {
-            //To Do if Battery is absent
-            IsBattery = 0;
-        }
-    }
-#endif
-
-#ifdef CONFIG_LGE_LIMIT_FREQ_TABLE
-	if(boot_mode == LGE_BOOT_MODE_FACTORY || boot_mode == LGE_BOOT_MODE_PIFBOOT
-#ifdef CONFIG_LGE_PM_BATTERY_ID_CHECKER
-	   || IsBattery == 0
-#endif
-		) {
-		/* XXX: MSM8974v1 is not considered */
-		/* Parse CPU freq -> L2/Mem BW map table. */
-		if (!of_find_property(dev->of_node, PROP_FACT_TBL, &len))
-			return -EINVAL;
-		len /= sizeof(*data);
-	} else {
-		/* Parse CPU freq -> L2/Mem BW map table. */
-		if (!of_find_property(dev->of_node, PROP_TBL, &len))
-			return -EINVAL;
-		len /= sizeof(*data);
-	}
-#else /* qmc original */
 	/* Parse CPU freq -> L2/Mem BW map table. */
 	if (!of_find_property(dev->of_node, PROP_TBL, &len))
 		return -EINVAL;
 	len /= sizeof(*data);
-#endif
 
 	if (len % num_cols || len == 0)
 		return -EINVAL;
@@ -504,25 +473,9 @@ static int cpufreq_parse_dt(struct device *dev)
 	if (!data)
 		return -ENOMEM;
 
-#ifdef CONFIG_LGE_LIMIT_FREQ_TABLE
-	if(boot_mode == LGE_BOOT_MODE_FACTORY || boot_mode == LGE_BOOT_MODE_PIFBOOT
-#ifdef CONFIG_LGE_PM_BATTERY_ID_CHECKER
-	   || IsBattery == 0
-#endif
-		) {
-		ret = of_property_read_u32_array(dev->of_node, PROP_FACT_TBL, data, len);
-		if (ret)
-			return ret;
-	} else {
-		ret = of_property_read_u32_array(dev->of_node, PROP_TBL, data, len);
-		if (ret)
-			return ret;
-	}
-#else /* qmc original */
 	ret = of_property_read_u32_array(dev->of_node, PROP_TBL, data, len);
 	if (ret)
 		return ret;
-#endif
 
 	/* Allocate all data structures. */
 	freq_table = devm_kzalloc(dev, (nf + 1) * sizeof(*freq_table),
@@ -586,10 +539,40 @@ static int cpufreq_parse_dt(struct device *dev)
 	freq_table[i].index = i;
 	freq_table[i].frequency = CPUFREQ_TABLE_END;
 
+#ifdef CONFIG_CPU_VOLTAGE_TABLE
+	dts_freq_table =
+		devm_kzalloc(dev, (nf + 1) *
+			sizeof(struct cpufreq_frequency_table),
+			GFP_KERNEL);
+
+	if (!dts_freq_table)
+		return -ENOMEM;
+
+	for (i = 0, j = 0; i < nf; i++, j += 3)
+		dts_freq_table[i].frequency = data[j];
+	dts_freq_table[i].frequency = CPUFREQ_TABLE_END;
+#endif
+
 	devm_kfree(dev, data);
 
 	return 0;
 }
+
+#ifdef CONFIG_CPU_VOLTAGE_TABLE
+bool is_used_by_scaling(unsigned int freq)
+{
+	unsigned int i, cpu_freq;
+
+	for (i = 0; dts_freq_table[i].frequency != CPUFREQ_TABLE_END; i++) {
+		cpu_freq = dts_freq_table[i].frequency;
+		if (cpu_freq == CPUFREQ_ENTRY_INVALID)
+			continue;
+		if (freq == cpu_freq)
+			return true;
+	}
+	return false;
+}
+#endif
 
 #ifdef CONFIG_DEBUG_FS
 static int msm_cpufreq_show(struct seq_file *m, void *unused)
