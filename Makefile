@@ -1,7 +1,7 @@
 VERSION = 3
 PATCHLEVEL = 4
 SUBLEVEL = 0
-EXTRAVERSION = _piaoxue99_Kernel_V0.2-L24
+EXTRAVERSION = _piaoxue99_Kernel_V0.3-L24
 NAME = Saber-toothed Squirrel
 
 # *DOCUMENTATION*
