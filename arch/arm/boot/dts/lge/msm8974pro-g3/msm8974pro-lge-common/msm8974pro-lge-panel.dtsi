@@ -248,8 +248,7 @@
 		qcom,mdss-dsi-dma-trigger = "trigger_sw";
 		qcom,mdss-dsi-mdp-trigger = "none";
 		qcom,mdss-dsi-bl-pmic-control-type = "bl_others";
-		qcom,mdss-dsi-pan-enable-dynamic-fps;
-		qcom,mdss-dsi-pan-fps-update = "dfps_immediate_porch_mode";
+	
 		qcom,mdss-dsi-reset-sequence = <1 5>;
 		qcom,mdss-dsi-lp11-init;
 		qcom,cont-splash-enabled;
@@ -386,8 +385,7 @@
 		qcom,mdss-dsi-dma-trigger = "trigger_sw";
 		qcom,mdss-dsi-mdp-trigger = "none";
 		qcom,mdss-dsi-bl-pmic-control-type = "bl_others";
-		qcom,mdss-dsi-pan-enable-dynamic-fps;
-		qcom,mdss-dsi-pan-fps-update = "dfps_immediate_porch_mode";
+	 
 		qcom,mdss-dsi-reset-sequence = <1 5>;
 		qcom,mdss-dsi-lp11-init;
 		qcom,cont-splash-enabled;
