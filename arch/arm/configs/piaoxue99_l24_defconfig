@@ -1,6 +1,6 @@
 #
 # Automatically generated file; DO NOT EDIT.
-# Linux/arm 3.4.0_piaoxue99_Kernel_V0.8-L24 Kernel Configuration
+# Linux/arm 3.4.0_piaoxue99_Kernel_V0.9-L24 Kernel Configuration
 #
 CONFIG_ARM=y
 CONFIG_ARM_HAS_SG_CHAIN=y
